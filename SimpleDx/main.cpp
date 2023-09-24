@@ -41,6 +41,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 		{
 			break;
 		}
+
+		SimpleDx::Refresh();
 	}
 
 	SimpleDx::Dispose();
