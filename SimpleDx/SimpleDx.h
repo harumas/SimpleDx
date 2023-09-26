@@ -2,12 +2,14 @@
 #include <Windows.h> 
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <d3dcompiler.h>
 #include <DirectXMath.h>
 #include <vector>
 #include <string>
 
 #pragma comment(lib,"d3d12.lib")
 #pragma comment(lib,"dxgi.lib")
+#pragma comment(lib,"d3dcompiler.lib")
 
 using namespace DirectX;
 
@@ -19,6 +21,7 @@ public:
 
 	static int Initialize(long width, long height, wchar_t* title);
 	static void Dispose();
+	static void SetUpData();
 	static void Refresh();
 
 private:
@@ -34,7 +37,9 @@ private:
 	static ID3D12DescriptorHeap* rtvHeaps;
 	static std::vector<ID3D12Resource*> backBuffers;
 	static ID3D12Fence* fence;
-	static	UINT64 fenceVal;
+	static UINT64 fenceVal;
+	static long windowWidth;
+	static long windowHeight;
 
 	static int CreateDevice();
 };

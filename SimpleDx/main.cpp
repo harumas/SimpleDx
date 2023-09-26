@@ -20,14 +20,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 	if (SimpleDx::Initialize(1280, 720, title) == -1)
 		return 0;
 
-	XMFLOAT3 vertices[] =
-	{
-		{-1.0f,-1.0f,0.0f},
-		{-1.0f,1.0f,0.0f},
-		{1.0f,-1.0f,0.0f},
-	};
-
 	MSG msg = {};
+
+	SimpleDx::SetUpData();
 
 	while (true)
 	{
