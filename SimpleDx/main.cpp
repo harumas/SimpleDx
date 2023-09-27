@@ -7,6 +7,7 @@
 #endif using namespace std;
 
 
+
 #ifdef _DEBUG 
 int main()
 {
@@ -24,6 +25,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 
 	SimpleDx::SetUpData();
 
+	unsigned int frame = 0;
+
 	while (true)
 	{
 		if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
@@ -37,7 +40,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 			break;
 		}
 
-		SimpleDx::Refresh();
+		SimpleDx::Refresh(frame);
+		//++frame;
 	}
 
 	SimpleDx::Dispose();

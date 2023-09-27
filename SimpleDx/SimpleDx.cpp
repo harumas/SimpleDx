@@ -13,9 +13,40 @@ std::vector<ID3D12Resource*> SimpleDx::backBuffers;
 ID3D12DescriptorHeap* SimpleDx::rtvHeaps = nullptr;
 ID3D12Fence* SimpleDx::fence = nullptr;
 UINT64 SimpleDx::fenceVal = 0;
+ID3D12PipelineState* SimpleDx::pipelineState = nullptr;
+D3D12_VIEWPORT SimpleDx::viewport = {};
+D3D12_RECT SimpleDx::scissorrect = {};
+ID3D12RootSignature* SimpleDx::rootSignature = nullptr;
+D3D12_INDEX_BUFFER_VIEW SimpleDx::ibView = {};
+D3D12_VERTEX_BUFFER_VIEW SimpleDx::vbView = {};
+
 long SimpleDx::windowWidth = 0;
 long SimpleDx::windowHeight = 0;
 
+
+///@brief コンソール画面にフォーマット付き文字列を表示
+///@param format フォーマット(%dとか%fとかの)
+///@param 可変長引数
+///@remarksこの関数はデバッグ用です。デバッグ時にしか動作しません
+void DebugOutputFormatString(const char* format, ...)
+{
+	#ifdef _DEBUG
+	va_list valist;
+	va_start(valist, format);
+	vprintf(format, valist);
+	va_end(valist);
+	#endif
+}
+
+void EnableDebugLayer()
+{
+	ID3D12Debug* debugLayer = nullptr;
+	if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugLayer))))
+	{
+		debugLayer->EnableDebugLayer();
+		debugLayer->Release();
+	}
+}
 
 LRESULT WindowProcedure(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
@@ -30,23 +61,24 @@ LRESULT WindowProcedure(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 
 int SimpleDx::Initialize(long width, long height, wchar_t* title)
 {
-	HRESULT result = S_OK;
-	wnd = {};
 	windowWidth = width;
 	windowHeight = height;
 
+	DebugOutputFormatString("Show window test.");
+	HINSTANCE hInst = GetModuleHandle(nullptr);
+	//ウィンドウクラス生成＆登録
+	wnd = {};
 	wnd.cbSize = sizeof(WNDCLASSEX);
 	wnd.lpfnWndProc = (WNDPROC)WindowProcedure;//コールバック関数の指定
 	wnd.lpszClassName = title;//アプリケーションクラス名(適当でいいです)
 	wnd.hInstance = GetModuleHandle(0);//ハンドルの取得
 	RegisterClassEx(&wnd);//アプリケーションクラス(こういうの作るからよろしくってOSに予告する)
 
-	RECT wrc = { 0, 0, width, height };
-
+	RECT wrc = { 0,0, width, height };//ウィンドウサイズを決める
 	AdjustWindowRect(&wrc, WS_OVERLAPPEDWINDOW, false);//ウィンドウのサイズはちょっと面倒なので関数を使って補正する
 	//ウィンドウオブジェクトの生成
 	hwnd = CreateWindow(wnd.lpszClassName,//クラス名指定
-		title,//タイトルバーの文字
+		_T("DX12 単純ポリゴンテスト"),//タイトルバーの文字
 		WS_OVERLAPPEDWINDOW,//タイトルバーと境界線があるウィンドウです
 		CW_USEDEFAULT,//表示X座標はOSにお任せします
 		CW_USEDEFAULT,//表示Y座標はOSにお任せします
@@ -57,72 +89,81 @@ int SimpleDx::Initialize(long width, long height, wchar_t* title)
 		wnd.hInstance,//呼び出しアプリケーションハンドル
 		nullptr);//追加パラメータ
 
+	#ifdef _DEBUG
+	//デバッグレイヤーをオンに
+	EnableDebugLayer();
+	#endif
+
 	if (CreateDevice() == -1)
 	{
 		return -1;
 	}
 
-	DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
+	HRESULT	result = dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAllocator));
+	result = dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAllocator, nullptr, IID_PPV_ARGS(&cmdList));
+	//_cmdList->Close();
+	D3D12_COMMAND_QUEUE_DESC cmdQueueDesc = {};
+	cmdQueueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;//タイムアウトなし
+	cmdQueueDesc.NodeMask = 0;
+	cmdQueueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;//プライオリティ特に指定なし
+	cmdQueueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;//ここはコマンドリストと合わせてください
+	result = dev->CreateCommandQueue(&cmdQueueDesc, IID_PPV_ARGS(&cmdQueue));//コマンドキュー生成
 
-	swapChainDesc.Width = width;
-	swapChainDesc.Height = height;
-	swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; //ピクセルフォーマット
-	swapChainDesc.Stereo = false; //ステレオ表示フラグ
-	swapChainDesc.SampleDesc.Count = 1; //マルチサンプルの指定
-	swapChainDesc.SampleDesc.Quality = 0;
-	swapChainDesc.BufferUsage = DXGI_USAGE_BACK_BUFFER;
-	swapChainDesc.BufferCount = 2; //ダブルバッファーなので2
+	DXGI_SWAP_CHAIN_DESC1 swapchainDesc = {};
+	swapchainDesc.Width = width;
+	swapchainDesc.Height = height;
+	swapchainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	swapchainDesc.Stereo = false;
+	swapchainDesc.SampleDesc.Count = 1;
+	swapchainDesc.SampleDesc.Quality = 0;
+	swapchainDesc.BufferUsage = DXGI_USAGE_BACK_BUFFER;
+	swapchainDesc.BufferCount = 2;
+	swapchainDesc.Scaling = DXGI_SCALING_STRETCH;
+	swapchainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+	swapchainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+	swapchainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
-	//バックバッファーは伸び縮み可能
-	swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
-	//フリップ後は速やかに破棄
-	swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-	//特に指定なし
-	swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
-	//ウィンドウとスクリーンの切替可能
-	swapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
-	result = dxgiFactory->CreateSwapChainForHwnd(cmdQueue, hwnd, &swapChainDesc, nullptr, nullptr, (IDXGISwapChain1**)&swapChain);
+	result = dxgiFactory->CreateSwapChainForHwnd(cmdQueue,
+		hwnd,
+		&swapchainDesc,
+		nullptr,
+		nullptr,
+		(IDXGISwapChain1**)&swapChain);
 
 	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-
-	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; //レンダーターゲットビューなのでRTV
+	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;//レンダーターゲットビューなので当然RTV
 	heapDesc.NodeMask = 0;
-	heapDesc.NumDescriptors = 2; //表裏の2つ
-	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; //特に指定なし
-
+	heapDesc.NumDescriptors = 2;//表裏の２つ
+	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;//特に指定なし
 	result = dev->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&rtvHeaps));
+	DXGI_SWAP_CHAIN_DESC swcDesc = {};
+	result = swapChain->GetDesc(&swcDesc);
 
-	DXGI_SWAP_CHAIN_DESC swDesc = {};
-	result = swapChain->GetDesc(&swDesc);
-
-	backBuffers = std::vector <ID3D12Resource*>(swDesc.BufferCount);
+	backBuffers = std::vector<ID3D12Resource*>(swcDesc.BufferCount);
 	D3D12_CPU_DESCRIPTOR_HANDLE handle = rtvHeaps->GetCPUDescriptorHandleForHeapStart();
-
-	for (UINT i = 0; i < swDesc.BufferCount; i++)
+	for (size_t i = 0; i < swcDesc.BufferCount; ++i)
 	{
-		result = swapChain->GetBuffer(i, IID_PPV_ARGS(&backBuffers[i]));
+		//ID3D12Resource* backBuffer = nullptr;
+		result = swapChain->GetBuffer(static_cast<UINT>(i), IID_PPV_ARGS(&backBuffers[i]));
 		dev->CreateRenderTargetView(backBuffers[i], nullptr, handle);
 		handle.ptr += dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	}
 
-
 	result = dev->CreateFence(fenceVal, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
 
-	ShowWindow(hwnd, SW_SHOW);
-
-
+	ShowWindow(hwnd, SW_SHOW);//ウィンドウ表示
 
 	return 0;
 }
 
 void SimpleDx::SetUpData()
 {
-	XMFLOAT3 vertices[] =
-	{
-		{-1.0f,-1.0f,0.0f},
-		{-1.0f,1.0f,0.0f},
-		{1.0f,-1.0f,0.0f},
+	Vertex vertices[] = {
+		{{-0.4f,-0.7f,0.0f},{0.0f,1.0f}},//左下
+	{ { -0.4f,0.7f,0.0f },{0.0f,0.0f}} ,//左上
+		{{0.4f,-0.7f,0.0f},{0.0f,0.0f} },//右下
+		{{ 0.4f,0.7f,0.0f },{0.0f,0.0f} }//右上
 	};
 
 	D3D12_HEAP_PROPERTIES heapprop = {};
@@ -159,7 +200,6 @@ void SimpleDx::SetUpData()
 
 	vertBuff->Unmap(0, nullptr);
 
-	D3D12_VERTEX_BUFFER_VIEW vbView = {};
 	vbView.BufferLocation = vertBuff->GetGPUVirtualAddress();//バッファの仮想アドレス
 	vbView.SizeInBytes = sizeof(vertices);//全バイト数
 	vbView.StrideInBytes = sizeof(vertices[0]);//1頂点あたりのバイト数
@@ -185,12 +225,9 @@ void SimpleDx::SetUpData()
 	idxBuff->Unmap(0, nullptr);
 
 	//インデックスバッファビューを作成
-	D3D12_INDEX_BUFFER_VIEW ibView = {};
 	ibView.BufferLocation = idxBuff->GetGPUVirtualAddress();
 	ibView.Format = DXGI_FORMAT_R16_UINT;
 	ibView.SizeInBytes = sizeof(indices);
-
-
 
 	ID3DBlob* _vsBlob = nullptr;
 	ID3DBlob* _psBlob = nullptr;
@@ -297,21 +334,18 @@ void SimpleDx::SetUpData()
 	gpipeline.SampleDesc.Count = 1;//サンプリングは1ピクセルにつき１
 	gpipeline.SampleDesc.Quality = 0;//クオリティは最低
 
-	ID3D12RootSignature* rootsignature = nullptr;
 
 	D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
 	rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
 	ID3DBlob* rootSigBlob = nullptr;
 	result = D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &rootSigBlob, &errorBlob);
-	result = dev->CreateRootSignature(0, rootSigBlob->GetBufferPointer(), rootSigBlob->GetBufferSize(), IID_PPV_ARGS(&rootsignature));
+	result = dev->CreateRootSignature(0, rootSigBlob->GetBufferPointer(), rootSigBlob->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
 	rootSigBlob->Release();
 
-	gpipeline.pRootSignature = rootsignature;
-	ID3D12PipelineState* _pipelinestate = nullptr;
-	result = dev->CreateGraphicsPipelineState(&gpipeline, IID_PPV_ARGS(&_pipelinestate));
+	gpipeline.pRootSignature = rootSignature;
+	result = dev->CreateGraphicsPipelineState(&gpipeline, IID_PPV_ARGS(&pipelineState));
 
-	D3D12_VIEWPORT viewport = {};
 	viewport.Width = windowWidth;//出力先の幅(ピクセル数)
 	viewport.Height = windowHeight;//出力先の高さ(ピクセル数)
 	viewport.TopLeftX = 0;//出力先の左上座標X
@@ -319,8 +353,6 @@ void SimpleDx::SetUpData()
 	viewport.MaxDepth = 1.0f;//深度最大値
 	viewport.MinDepth = 0.0f;//深度最小値
 
-
-	D3D12_RECT scissorrect = {};
 	scissorrect.top = 0;//切り抜き上座標
 	scissorrect.left = 0;//切り抜き左座標
 	scissorrect.right = scissorrect.left + windowWidth;//切り抜き右座標
@@ -328,11 +360,11 @@ void SimpleDx::SetUpData()
 }
 
 
-void SimpleDx::Refresh()
+void SimpleDx::Refresh(unsigned char frame)
 {
 	//DirectX処理
 	//バックバッファのインデックスを取得
-	UINT bbIdx = swapChain->GetCurrentBackBufferIndex();
+	auto bbIdx = swapChain->GetCurrentBackBufferIndex();
 
 	D3D12_RESOURCE_BARRIER BarrierDesc = {};
 	BarrierDesc.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -341,16 +373,36 @@ void SimpleDx::Refresh()
 	BarrierDesc.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	BarrierDesc.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
 	BarrierDesc.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+
 	cmdList->ResourceBarrier(1, &BarrierDesc);
+
+	cmdList->SetPipelineState(pipelineState);
+
 
 	//レンダーターゲットを指定
 	auto rtvH = rtvHeaps->GetCPUDescriptorHandleForHeapStart();
-	rtvH.ptr += static_cast<ULONG_PTR>(bbIdx * dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV));
+	rtvH.ptr += bbIdx * dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	cmdList->OMSetRenderTargets(1, &rtvH, false, nullptr);
 
 	//画面クリア
-	float clearColor[] = { 1.0f,1.0f,0.0f,1.0f };//黄色
+
+	float r, g, b;
+	r = (float)(0xff & frame >> 16) / 255.0f;
+	g = (float)(0xff & frame >> 8) / 255.0f;
+	b = (float)(0xff & frame >> 0) / 255.0f;
+	float clearColor[] = { r,g,b,1.0f };//黄色
 	cmdList->ClearRenderTargetView(rtvH, clearColor, 0, nullptr);
+	cmdList->RSSetViewports(1, &viewport);
+	cmdList->RSSetScissorRects(1, &scissorrect);
+	cmdList->SetGraphicsRootSignature(rootSignature);
+
+	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	cmdList->IASetVertexBuffers(0, 1, &vbView);
+	cmdList->IASetIndexBuffer(&ibView);
+
+
+	//_cmdList->DrawInstanced(4, 1, 0, 0);
+	cmdList->DrawIndexedInstanced(6, 1, 0, 0, 0);
 
 	BarrierDesc.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
 	BarrierDesc.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
@@ -358,7 +410,6 @@ void SimpleDx::Refresh()
 
 	//命令のクローズ
 	cmdList->Close();
-
 
 	//コマンドリストの実行
 	ID3D12CommandList* cmdlists[] = { cmdList };
@@ -374,7 +425,7 @@ void SimpleDx::Refresh()
 		CloseHandle(event);
 	}
 	cmdAllocator->Reset();//キューをクリア
-	cmdList->Reset(cmdAllocator, nullptr);//再びコマンドリストをためる準備
+	cmdList->Reset(cmdAllocator, pipelineState);//再びコマンドリストをためる準備
 
 
 	//フリップ
@@ -383,35 +434,22 @@ void SimpleDx::Refresh()
 
 int SimpleDx::CreateDevice()
 {
-	//DXのフィーチャーレベルを定義
-	D3D_FEATURE_LEVEL levels[] =
-	{
-			D3D_FEATURE_LEVEL_12_1,
-			D3D_FEATURE_LEVEL_12_0,
-			D3D_FEATURE_LEVEL_11_1,
-			D3D_FEATURE_LEVEL_11_0,
+	//DirectX12まわり初期化
+		//フィーチャレベル列挙
+	D3D_FEATURE_LEVEL levels[] = {
+		D3D_FEATURE_LEVEL_12_1,
+		D3D_FEATURE_LEVEL_12_0,
+		D3D_FEATURE_LEVEL_11_1,
+		D3D_FEATURE_LEVEL_11_0,
 	};
-
-	//対応しているドライバーがなければ終了
-	HRESULT result = S_OK;
-	if (FAILED(CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG, IID_PPV_ARGS(&dxgiFactory))))
-	{
-		if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&dxgiFactory))))
-		{
-			return -1;
-		}
-	}
-
-	//利用可能なAdapterを検索する
-	//Adapter: 1つまたは複数の GPU、DAC、およびビデオメモリー
+	auto result = CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory));
 	std::vector <IDXGIAdapter*> adapters;
 	IDXGIAdapter* tmpAdapter = nullptr;
 	for (int i = 0; dxgiFactory->EnumAdapters(i, &tmpAdapter) != DXGI_ERROR_NOT_FOUND; ++i)
 	{
 		adapters.push_back(tmpAdapter);
 	}
-
-	for (IDXGIAdapter* adpt : adapters)
+	for (auto adpt : adapters)
 	{
 		DXGI_ADAPTER_DESC adesc = {};
 		adpt->GetDesc(&adesc);
@@ -424,9 +462,8 @@ int SimpleDx::CreateDevice()
 	}
 
 	//Direct3Dデバイスの初期化
-	//デバイスの対応しているフィーチャーレベルを検索
 	D3D_FEATURE_LEVEL featureLevel;
-	for (D3D_FEATURE_LEVEL l : levels)
+	for (auto l : levels)
 	{
 		if (D3D12CreateDevice(tmpAdapter, l, IID_PPV_ARGS(&dev)) == S_OK)
 		{
@@ -434,7 +471,6 @@ int SimpleDx::CreateDevice()
 			break;
 		}
 	}
-
 	result = dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAllocator));
 	result = dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAllocator, nullptr, IID_PPV_ARGS(&cmdList));
 
