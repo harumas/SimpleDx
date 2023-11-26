@@ -57,7 +57,7 @@ private:
 
 	static int CreateDevice();
 };
- 
+
 struct Vertex
 {
 	XMFLOAT3 pos;

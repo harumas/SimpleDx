@@ -16,7 +16,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 {
 	#endif 
 
-	wchar_t title[] = L"DX12ƒeƒXƒg";
+	wchar_t title[] = L"DX12ãƒ†ã‚¹ãƒˆ";
 
 	if (SimpleDx::Initialize(1280, 720, title) == -1)
 		return 0;
