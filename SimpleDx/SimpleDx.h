@@ -56,6 +56,7 @@ private:
 
 
 	static int CreateDevice();
+	static void CreateRootSignature();
 };
 
 struct Vertex
